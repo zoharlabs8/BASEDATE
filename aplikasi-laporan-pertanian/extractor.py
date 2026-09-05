@@ -422,8 +422,8 @@ def extract_with_gemini(image_paths: List[Path], api_key: Optional[str] = None) 
         use_new = False
 
     if use_new:
-        # model 2.5 sudah deprecated untuk new users, pakai 3.x
-        for model_name in ["gemini-3.5-flash", "gemini-3.6-flash", "gemini-3-flash-preview", "gemini-3.1-flash-lite", "gemini-flash-latest"]:
+        # model 3.5-flash-lite paling cepat untuk tulisan tangan
+        for model_name in ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-flash-latest", "gemini-3.6-flash"]:
             try:
                 client = genai_new.Client(api_key=key)
                 from PIL import Image
@@ -453,6 +453,52 @@ def extract_with_gemini(image_paths: List[Path], api_key: Optional[str] = None) 
         pass
 
     raise RuntimeError(f"Semua model Gemini gagal. Last error: {last_err if 'last_err' in locals() else 'unknown'} — coba restart app atau ganti model. List models: gemini-2.5-flash / gemini-flash-latest")
+
+def extract_with_qwen(image_paths: List[Path], api_key: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Qwen2-VL-Max via Alibaba DashScope (OpenAI-compatible) — terbaik untuk handwriting Indonesia"""
+    import openai
+    key = api_key or os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY") or os.getenv("ALIBABA_API_KEY")
+    if not key:
+        raise RuntimeError("QWEN_API_KEY tidak ditemukan — isi di .env (https://dashscope.console.aliyun.com/)")
+    client = openai.OpenAI(api_key=key, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1")
+    content = [{"type": "text", "text": VISION_PROMPT}]
+    for p in image_paths:
+        b64 = base64.b64encode(p.read_bytes()).decode("utf-8")
+        mime = "image/jpeg" if p.suffix.lower() in {".jpg",".jpeg"} else "image/png"
+        content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}", "detail": "high"}})
+    resp = client.chat.completions.create(model="qwen-vl-max", messages=[{"role":"user","content":content}], temperature=0.1, max_tokens=8000)
+    raw = resp.choices[0].message.content.strip()
+    m = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+    if m: raw = m.group(0)
+    data = json.loads(raw)
+    recs = normalize_ai_records(data)
+    if _is_gibberish(recs): raise RuntimeError(f"Qwen gibberish: {raw[:200]}")
+    return recs
+
+def extract_with_claude(image_paths: List[Path], api_key: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Claude 3.5 Sonnet — paling akurat untuk handwriting/tabel berantakan"""
+    try:
+        import anthropic
+    except ImportError:
+        raise RuntimeError("anthropic belum terinstall: pip install anthropic")
+    key = api_key or os.getenv("CLAUDE_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+    if not key:
+        raise RuntimeError("CLAUDE_API_KEY tidak ditemukan — isi di .env (https://console.anthropic.com/)")
+    client = anthropic.Anthropic(api_key=key)
+    content = []
+    for p in image_paths:
+        b64 = base64.b64encode(p.read_bytes()).decode("utf-8")
+        mime = "image/jpeg" if p.suffix.lower() in {".jpg",".jpeg"} else "image/png"
+        content.append({"type": "image", "source": {"type": "base64", "media_type": mime, "data": b64}})
+    content.append({"type": "text", "text": VISION_PROMPT})
+    resp = client.messages.create(model="claude-3-5-sonnet-20241022", max_tokens=8000, temperature=0.1, messages=[{"role":"user","content":content}])
+    raw = "".join([b.text for b in resp.content if hasattr(b, "text")]).strip()
+    m = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+    if m: raw = m.group(0)
+    data = json.loads(raw)
+    recs = normalize_ai_records(data)
+    if _is_gibberish(recs): raise RuntimeError(f"Claude gibberish: {raw[:200]}")
+    return recs
 
 def normalize_ai_records(ai_data: dict) -> List[Dict[str, Any]]:
     records = ai_data.get("records", [])

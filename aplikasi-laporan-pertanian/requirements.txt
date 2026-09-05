@@ -6,7 +6,8 @@ requests
 pytesseract
 python-dotenv
 gdown
-# Online opsional (hanya jika mau pakai API key — install manual jika butuh):
-# openai
-# google-generativeai
+openai
+google-genai
+anthropic
+# google-generativeai (deprecated, tetap support fallback)
 
