@@ -1,0 +1,12 @@
+streamlit
+openpyxl
+pandas
+pillow>=7.1.0,<11
+requests
+pytesseract
+python-dotenv
+gdown
+# Online opsional (hanya jika mau pakai API key — install manual jika butuh):
+# openai
+# google-generativeai
+
