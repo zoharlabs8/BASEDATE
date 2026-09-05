@@ -8,6 +8,10 @@ load_dotenv(Path(__file__).parent / ".env")
 sys.path.insert(0, str(Path(__file__).parent))
 
 from extractor import is_drive_link, download_drive_images, extract_with_gemini, extract_with_qwen, extract_with_claude, extract_offline_fallback, get_sample_records, _is_gibberish
+try:
+    from zetapp_expert_model import expert_analyze, expert_audit_report, preprocess_for_expert
+    HAS_EXPERT=True
+except: HAS_EXPERT=False
 from excel_generator import generate_excel
 
 DEFAULT_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("API_KEY") or ""
@@ -84,23 +88,31 @@ def _session_tmp(sub=""):
     return base
 
 def _get_engine():
-    eng = st.session_state.get("engine", "Qwen2-VL Lokal (Gratis")
+    eng = st.session_state.get("engine", "ZETAPP Expert")
+    if "ZETAPP Expert" in eng: return "expert"
     if "Qwen2-VL Lokal" in eng or "Gratis" in eng: return "qwen_local"
     if "Qwen2-VL-Max" in eng: return "qwen"
     if "Claude" in eng: return "claude"
     return "gemini"
 def _extract_batch(batch):
     eng = _get_engine()
+    if eng=="expert" and HAS_EXPERT:
+        # ZETAPP Expert paling profesional: preprocess + lexicon + validator
+        # pakai Gemini sebagai base vision, tapi dengan prompt expert & koreksi
+        try:
+            return expert_analyze(batch, api_key=DEFAULT_API_KEY or QWEN_KEY or CLAUDE_KEY, engine="gemini")
+        except:
+            # fallback ke qwen jika gemini sibuk
+            try: return expert_analyze(batch, api_key=QWEN_KEY, engine="qwen")
+            except: return expert_analyze(batch, api_key=CLAUDE_KEY, engine="claude")
     if eng=="qwen_local":
         try:
             from extractor_local import extract_with_ollama
-            # coba model ringan dulu (2b), fallback ke qwen2-vl
             for mdl in ["qwen2-vl", "llava", "bakllava"]:
                 try: return extract_with_ollama(batch, model=mdl)
                 except: continue
             raise RuntimeError("Ollama tidak jalan")
         except Exception as e:
-            # fallback ke tesseract offline parser (juga gratis)
             from extractor_local import extract_with_tesseract
             raw=" ".join([extract_with_tesseract([p]) for p in batch])
             recs = extract_offline_fallback(raw)
@@ -216,13 +228,15 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-if "engine" not in st.session_state: st.session_state.engine = "Qwen2-VL Lokal (Gratis, tanpa API key) — Default"
+if "engine" not in st.session_state: st.session_state.engine = "🌟 ZETAPP Expert (Paling Profesional) — Default"
 st.markdown('<div style="display:flex; gap:8px; align-items:center; margin:10px 0;">', unsafe_allow_html=True)
-st.session_state.engine = st.selectbox("Engine Vision", ["Qwen2-VL Lokal (Gratis, tanpa API key) — Default", "Gemini 3.5-flash (butuh API AQ.)", "Qwen2-VL-Max Cloud (butuh QWEN_API_KEY)", "Claude 3.5 Sonnet (butuh CLAUDE_API_KEY)"], label_visibility="collapsed", key="engine_select")
+st.session_state.engine = st.selectbox("Engine Vision — Pilih Model Expert", ["🌟 ZETAPP Expert (Paling Profesional) — Default", "Qwen2-VL Lokal (Gratis, tanpa API key)", "Gemini 3.5-flash", "Qwen2-VL-Max Cloud", "Claude 3.5 Sonnet"], label_visibility="collapsed", key="engine_select")
 st.markdown('</div>', unsafe_allow_html=True)
 st.session_state.engine = st.session_state.engine_select if "engine_select" in st.session_state else st.session_state.engine
-if "Lokal (Gratis" in st.session_state.engine:
-    st.caption("✅ Gratis tanpa API key — butuh 1x: `brew install ollama && ollama pull qwen2-vl && ollama serve` (model ~4GB, setelah itu offline selamanya)")
+if "ZETAPP Expert" in st.session_state.engine:
+    st.caption("🌟 **Expert**: preprocess CLAHE + lexicon 100+ tanaman + validator K+S+B + confidence + audit trail — paling profesional untuk tulisan & angka pertanian")
+elif "Lokal (Gratis" in st.session_state.engine:
+    st.caption("✅ Gratis tanpa API key — `brew install ollama && ollama pull qwen2-vl && ollama serve`")
 elif "Gemini" in st.session_state.engine:
     st.caption("Butuh GEMINI_API_KEY di .env (AQ.Ab8...)")
 elif "Qwen2-VL-Max" in st.session_state.engine:
