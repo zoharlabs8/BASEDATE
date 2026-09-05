@@ -84,12 +84,28 @@ def _session_tmp(sub=""):
     return base
 
 def _get_engine():
-    eng = st.session_state.get("engine", "Gemini 3.5-flash (Default)")
-    if "Qwen" in eng: return "qwen"
+    eng = st.session_state.get("engine", "Qwen2-VL Lokal (Gratis")
+    if "Qwen2-VL Lokal" in eng or "Gratis" in eng: return "qwen_local"
+    if "Qwen2-VL-Max" in eng: return "qwen"
     if "Claude" in eng: return "claude"
     return "gemini"
 def _extract_batch(batch):
     eng = _get_engine()
+    if eng=="qwen_local":
+        try:
+            from extractor_local import extract_with_ollama
+            # coba model ringan dulu (2b), fallback ke qwen2-vl
+            for mdl in ["qwen2-vl", "llava", "bakllava"]:
+                try: return extract_with_ollama(batch, model=mdl)
+                except: continue
+            raise RuntimeError("Ollama tidak jalan")
+        except Exception as e:
+            # fallback ke tesseract offline parser (juga gratis)
+            from extractor_local import extract_with_tesseract
+            raw=" ".join([extract_with_tesseract([p]) for p in batch])
+            recs = extract_offline_fallback(raw)
+            if _is_gibberish(recs): raise RuntimeError(f"Ollama belum install & OCR gagal: {e}")
+            return recs
     if eng=="qwen": return extract_with_qwen(batch, api_key=QWEN_KEY or DEFAULT_API_KEY)
     if eng=="claude": return extract_with_claude(batch, api_key=CLAUDE_KEY or DEFAULT_API_KEY)
     return extract_with_gemini(batch, api_key=DEFAULT_API_KEY)
@@ -200,12 +216,19 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-if "engine" not in st.session_state: st.session_state.engine = "Gemini 3.5-flash (Default)"
+if "engine" not in st.session_state: st.session_state.engine = "Qwen2-VL Lokal (Gratis, tanpa API key) — Default"
 st.markdown('<div style="display:flex; gap:8px; align-items:center; margin:10px 0;">', unsafe_allow_html=True)
-st.session_state.engine = st.selectbox("Engine Vision (profesional)", ["Gemini 3.5-flash (Default)", "Qwen2-VL-Max (Alibaba — terbaik handwriting ID)", "Claude 3.5 Sonnet (Anthropic — paling akurat)"], label_visibility="collapsed", key="engine_select")
+st.session_state.engine = st.selectbox("Engine Vision", ["Qwen2-VL Lokal (Gratis, tanpa API key) — Default", "Gemini 3.5-flash (butuh API AQ.)", "Qwen2-VL-Max Cloud (butuh QWEN_API_KEY)", "Claude 3.5 Sonnet (butuh CLAUDE_API_KEY)"], label_visibility="collapsed", key="engine_select")
 st.markdown('</div>', unsafe_allow_html=True)
-# sync
 st.session_state.engine = st.session_state.engine_select if "engine_select" in st.session_state else st.session_state.engine
+if "Lokal (Gratis" in st.session_state.engine:
+    st.caption("✅ Gratis tanpa API key — butuh 1x: `brew install ollama && ollama pull qwen2-vl && ollama serve` (model ~4GB, setelah itu offline selamanya)")
+elif "Gemini" in st.session_state.engine:
+    st.caption("Butuh GEMINI_API_KEY di .env (AQ.Ab8...)")
+elif "Qwen2-VL-Max" in st.session_state.engine:
+    st.caption("Butuh QWEN_API_KEY dari dashscope.console.aliyun.com")
+elif "Claude" in st.session_state.engine:
+    st.caption("Butuh CLAUDE_API_KEY dari console.anthropic.com")
 
 # === METRIC CARDS ala gambar (hanya design, tidak tambah fitur) ===
 total_foto = len(st.session_state.img_paths)
