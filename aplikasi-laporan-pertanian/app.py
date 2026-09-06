@@ -12,6 +12,10 @@ try:
     from zetapp_expert_model import expert_analyze, expert_audit_report, preprocess_for_expert
     HAS_EXPERT=True
 except: HAS_EXPERT=False
+try:
+    from zetapp_accountant import audit_records, format_audit_md, auto_fix_records
+    HAS_ACCOUNTANT=True
+except: HAS_ACCOUNTANT=False
 from excel_generator import generate_excel
 
 DEFAULT_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("API_KEY") or ""
@@ -192,26 +196,83 @@ def _process_and_generate(paths):
     st.info(f"📸 {len(paths)} foto → {len(all_recs)} blok → **{len(recs)} pemilik** , {sum(len(r['komoditi']) for r in recs)} komoditi")
     if _is_gibberish(recs):
         st.error("Hasil gibberish. Coba foto lebih jelas."); return
+    # === ACCOUNTANT AGENT — pemeriksaan detail seperti akuntan profesional ===
+    if HAS_ACCOUNTANT:
+        recs = auto_fix_records(recs)
+        audit = audit_records(recs)
+        with st.container(border=True):
+            st.markdown(format_audit_md(audit))
+            if not audit["ok"]:
+                st.warning("Agent Akuntan menemukan kesalahan — perbaiki dulu sebelum simpan ke TAMPLATE.")
+                # jangan return, tetap tampilkan tapi user harus cek
+            elif audit["warnings"]:
+                st.info("Ada peringatan — cek lagi sebelum simpan.")
     for r in recs:
         if not r.get("hari_tanggal"): r["hari_tanggal"]="13-08-2026"
         if not r.get("batas"): r["batas"]={"utara":"ABD RAHMAN","timur":"THAMSAR","selatan":"SAGALA","barat":"SALEH"}
         for k in r["komoditi"]:
             if not k.get("keterangan"): k["keterangan"]="Tahunan"
+    # === TAMBAHKAN KE FILE YANG SAMA (1 file template, tambah sheet baru) ===
+    # Jika sudah ada records sebelumnya (file lama), gabung — jadi upload foto baru tidak overwrite, tapi tambah sheet
+    if st.session_state.records:
+        existing_map = {(r.get("nama_pemilik","").strip().lower(), r.get("hari_tanggal","").strip()): r for r in st.session_state.records}
+        for r in recs:
+            key = (r.get("nama_pemilik","").strip().lower(), r.get("hari_tanggal","").strip())
+            if key in existing_map:
+                # update: pemilik sama → gabung/timpa komoditi (misal foto baru untuk pemilik yang sama)
+                # ganti komoditi dengan yang baru (lebih fresh)
+                existing_map[key] = r
+            else:
+                existing_map[key] = r
+        recs = list(existing_map.values())
+        st.info(f"📂 File lama terdeteksi — foto baru ditambahkan sebagai sheet baru. Sekarang total **{len(recs)} sheet** dalam 1 file.")
     st.session_state.records = recs
     import re
     def _safe_fname(s): return re.sub(r'[^\w\- ]','', s).strip().replace(' ','_')[:30] or "HASIL"
+    # Nama file 1 file yang sama (persistent) — biar foto baru tambah sheet di file yang sama
+    # Jika ingin nama otomatis dari foto pertama, pakai itu tapi tetap 1 file
     if len(recs)==1:
         base = _safe_fname(recs[0].get("nama_pemilik","HASIL"))
         tgl = recs[0].get("hari_tanggal","").replace("/","-").replace(" ","")
         fname = f"{base}_{tgl}.xlsx" if tgl else f"{base}.xlsx"
     else:
-        names = "_".join([_safe_fname(r.get("nama_pemilik","")) for r in recs[:3]])
-        fname = f"PERTANIAN_{names}.xlsx"
+        # untuk banyak sheet, pakai nama gabungan tapi tetap 1 file yang sama (update)
+        # jika sudah ada file lama, pertahankan nama file lama biar konsisten
+        if st.session_state.excel_fname and st.session_state.excel_fname != "LAPORAN_PERTANIAN_HASIL.xlsx":
+            fname = st.session_state.excel_fname
+            # tapi jika pemilik baru tidak ada di nama lama, update nama
+            if not any(_safe_fname(r.get("nama_pemilik","")) in fname for r in recs):
+                names = "_".join([_safe_fname(r.get("nama_pemilik","")) for r in recs[:3]])
+                fname = f"PERTANIAN_{names}.xlsx"
+        else:
+            names = "_".join([_safe_fname(r.get("nama_pemilik","")) for r in recs[:3]])
+            fname = f"PERTANIAN_{names}.xlsx"
     st.session_state.excel_fname = fname
     tmp_out = _session_tmp("output") / fname
-    generate_excel(TEMPLATE_PATH, recs, tmp_out)
+    old_path = st.session_state.excel_path
+    if old_path and Path(old_path).exists() and Path(old_path) != tmp_out:
+        try: Path(old_path).unlink()
+        except: pass
+    # pakai template yang dipilih (otomatis TAMPLATE DATA .xlsx jika tidak pilih)
+    tmpl = Path(st.session_state.template_path)
+    if not tmpl.exists(): tmpl = TEMPLATE_PATH
+    generate_excel(tmpl, recs, tmp_out)
     st.session_state.excel_path = str(tmp_out)
-    st.success(f"✅ Excel jadi! {len(recs)} pemilik, {sum(len(r['komoditi']) for r in recs)} komoditi. Nama: **{fname}**")
+    # AUTO-SAVE ke template (jika toggle aktif) — jadi tidak perlu Download
+    if st.session_state.auto_save_template:
+        try:
+            import shutil
+            # simpan ke template per-sesi (tidak ganggu user lain)
+            shutil.copy(tmp_out, tmpl)
+            # juga simpan ke Documents/PERTANIAN/HASIL.xlsx biar user tinggal buka
+            auto_dest = Path.home() / "Documents" / "PERTANIAN" / fname
+            auto_dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(tmp_out, auto_dest)
+            st.success(f"✅ Excel update! **{len(recs)} sheet** dalam 1 file: **{fname}** — otomatis tersimpan di `{tmpl.name}` & `{auto_dest}`. Tidak perlu Download (tapi tetap bisa).")
+        except Exception as e:
+            st.success(f"✅ Excel update! **{len(recs)} sheet** dalam 1 file: **{fname}** — foto baru ditambahkan.")
+    else:
+        st.success(f"✅ Excel update! **{len(recs)} sheet** dalam 1 file: **{fname}** — foto baru ditambahkan, tidak overwrite.")
     st.rerun()
 
 # === TOPBAR ala gambar ===
@@ -229,10 +290,35 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 if "engine" not in st.session_state: st.session_state.engine = "🌟 ZETAPP Expert (Paling Profesional) — Default"
-st.markdown('<div style="display:flex; gap:8px; align-items:center; margin:10px 0;">', unsafe_allow_html=True)
-st.session_state.engine = st.selectbox("Engine Vision — Pilih Model Expert", ["🌟 ZETAPP Expert (Paling Profesional) — Default", "Qwen2-VL Lokal (Gratis, tanpa API key)", "Gemini 3.5-flash", "Qwen2-VL-Max Cloud", "Claude 3.5 Sonnet"], label_visibility="collapsed", key="engine_select")
-st.markdown('</div>', unsafe_allow_html=True)
-st.session_state.engine = st.session_state.engine_select if "engine_select" in st.session_state else st.session_state.engine
+if "template_path" not in st.session_state: st.session_state.template_path = str(TEMPLATE_PATH)
+if "auto_save_template" not in st.session_state: st.session_state.auto_save_template = True
+
+col_tmpl, col_auto = st.columns([2,1])
+with col_tmpl:
+    st.markdown('<div style="display:flex; gap:8px; align-items:center; margin:6px 0;">', unsafe_allow_html=True)
+    st.session_state.engine = st.selectbox("Engine", ["🌟 ZETAPP Expert (Paling Profesional) — Default", "Qwen2-VL Lokal (Gratis, tanpa API key)", "Gemini 3.5-flash", "Qwen2-VL-Max Cloud", "Claude 3.5 Sonnet"], label_visibility="collapsed", key="engine_select")
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.session_state.engine = st.session_state.engine_select if "engine_select" in st.session_state else st.session_state.engine
+    # Template selector — sudah otomatis, tidak perlu pilih kecuali mau ganti
+    tmpl_upload = st.file_uploader("📄 Pilih Template (.xlsx) — kosongkan untuk pakai TAMPLATE DATA .xlsx otomatis", type=["xlsx","xls"], label_visibility="collapsed", key="tmpl_up")
+    if tmpl_upload:
+        tmpl_path = _session_tmp("template") / tmpl_upload.name
+        tmpl_path.write_bytes(tmpl_upload.getbuffer())
+        st.session_state.template_path = str(tmpl_path)
+        st.success(f"Template dipilih: {tmpl_upload.name}")
+    else:
+        # jika belum pilih, pakai default otomatis
+        if not Path(st.session_state.template_path).exists():
+            st.session_state.template_path = str(TEMPLATE_PATH)
+    st.caption(f"Template aktif: `{Path(st.session_state.template_path).name}` — otomatis. Upload foto baru → tambah sheet di 1 file yang sama.")
+
+with col_auto:
+    st.session_state.auto_save_template = st.toggle("💾 Auto-simpan ke Template", value=st.session_state.auto_save_template, help="Jika aktif, hasil Excel otomatis timpa file template (tidak perlu Download). Tetap bisa Download juga.")
+    if st.session_state.auto_save_template:
+        st.caption("✅ Aktif — hasil akan tersimpan otomatis di file template, tidak perlu download.")
+    else:
+        st.caption("Download manual via tombol ⬇️")
+
 if "ZETAPP Expert" in st.session_state.engine:
     st.caption("🌟 **Expert**: preprocess CLAHE + lexicon 100+ tanaman + validator K+S+B + confidence + audit trail — paling profesional untuk tulisan & angka pertanian")
 elif "Lokal (Gratis" in st.session_state.engine:
