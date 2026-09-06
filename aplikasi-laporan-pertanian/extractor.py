@@ -506,25 +506,26 @@ def normalize_ai_records(ai_data: dict) -> List[Dict[str, Any]]:
     for r in records:
         komoditi = []
         for k in r.get("komoditi", []):
+            nm = k.get("nama") or ""
             komoditi.append({
-                "nama": k.get("nama","").strip().title() or "Tanpa Nama",
+                "nama": str(nm).strip().title() or "Tanpa Nama",
                 "kecil": int(k.get("kecil",0) or 0),
                 "sedang": int(k.get("sedang",0) or 0),
                 "besar": int(k.get("besar",0) or 0),
-                "satuan": k.get("satuan") or ("Rumpun" if "bambu" in k.get("nama","").lower() else "Pohon"),
+                "satuan": k.get("satuan") or ("Rumpun" if "bambu" in str(k.get("nama","")).lower() else "Pohon"),
                 "keterangan": k.get("keterangan") or "Tahunan",
                 "raw": k.get("raw","")
             })
         out.append({
-            "nama_pemilik": r.get("nama_pemilik","").strip().title() or "Tanpa Nama",
-            "nama_penggarap": r.get("nama_penggarap", r.get("nama_pemilik","")).strip().title(),
-            "hari_tanggal": r.get("hari_tanggal","") or r.get("tanggal",""),
-            "nub": r.get("nub",""),
-            "luas_lahan": r.get("luas_lahan",""),
+            "nama_pemilik": str(r.get("nama_pemilik","") or "").strip().title() or "Tanpa Nama",
+            "nama_penggarap": str(r.get("nama_penggarap", r.get("nama_pemilik","")) or "").strip().title(),
+            "hari_tanggal": str(r.get("hari_tanggal","") or r.get("tanggal","") or ""),
+            "nub": str(r.get("nub","") or ""),
+            "luas_lahan": str(r.get("luas_lahan","") or ""),
             "komoditi": komoditi,
-            "batas": r.get("batas", {}),
-            "lokasi": r.get("lokasi",""),
-            "catatan": r.get("catatan",""),
+            "batas": r.get("batas", {}) or {},
+            "lokasi": str(r.get("lokasi","") or ""),
+            "catatan": str(r.get("catatan","") or ""),
             "raw_text": json.dumps(r, ensure_ascii=False)
         })
     return out

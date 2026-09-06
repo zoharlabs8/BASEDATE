@@ -180,20 +180,29 @@ def _process_and_generate(paths):
     if not all_recs:
         st.error("Tidak ada data terbaca dari foto. Coba foto lebih jelas / cek API key.")
         return
+    # 1 NAMA = 1 SHEET (hemat sheet) — 7 foto Sunniati → 1 sheet lengkap
     from collections import defaultdict
     merged = {}
     for r in all_recs:
-        key = (r.get("nama_pemilik","").strip().lower(), r.get("hari_tanggal","").strip())
-        if key not in merged: merged[key]=r
+        key = r.get("nama_pemilik","").strip().lower()
+        if not key: key="tanpa_nama"
+        if key not in merged: 
+            merged[key]=r
         else:
-            existing_names = {k["nama"].lower(): k for k in merged[key]["komoditi"]}
+            # gabung komoditi: jika nama komoditi sama, jumlahkan K+S+B
+            existing_names = {k["nama"].strip().lower(): k for k in merged[key]["komoditi"]}
             for k in r["komoditi"]:
-                lk=k["nama"].lower()
+                lk=k["nama"].strip().lower()
                 if lk in existing_names:
-                    existing_names[lk]["kecil"]+=k["kecil"]; existing_names[lk]["sedang"]+=k["sedang"]; existing_names[lk]["besar"]+=k["besar"]
-                else: merged[key]["komoditi"].append(k)
+                    existing_names[lk]["kecil"]+=int(k["kecil"] or 0)
+                    existing_names[lk]["sedang"]+=int(k["sedang"] or 0)
+                    existing_names[lk]["besar"]+=int(k["besar"] or 0)
+                else: 
+                    merged[key]["komoditi"].append(k)
+            # pakai tanggal terbaru
+            if r.get("hari_tanggal"): merged[key]["hari_tanggal"]=r["hari_tanggal"]
     recs = list(merged.values())
-    st.info(f"📸 {len(paths)} foto → {len(all_recs)} blok → **{len(recs)} pemilik** , {sum(len(r['komoditi']) for r in recs)} komoditi")
+    st.info(f"📸 {len(paths)} foto → {len(all_recs)} blok → **{len(recs)} sheet (1 nama = 1 sheet)** , {sum(len(r['komoditi']) for r in recs)} komoditi (hemat sheet). Contoh: 7 foto Sunniati → 1 sheet lengkap.")
     if _is_gibberish(recs):
         st.error("Hasil gibberish. Coba foto lebih jelas."); return
     # === ACCOUNTANT AGENT — pemeriksaan detail seperti akuntan profesional ===
